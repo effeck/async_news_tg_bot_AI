@@ -24,22 +24,25 @@ class AIProcessor:
         self.site_url = os.getenv('SITE_URL', 'https://async-news.ru')
         self.site_name = os.getenv('SITE_NAME', 'AsyncNews')
         self.db = db
-        self.prompt_template = """
-        Перепиши следующую новость в стиле Telegram-поста для IT-канала 🔧
-        Требования:
-        Источник указывать не нужно
-        Выводи ТОЛЬКО готовый текст поста на русском языке
-        Без markdown, только обычный текст
-        Объём: 100–150 слов
-        Каждый абзац должен содержать хотя бы один эмодзи (📱💻🔥🚀🧠👨‍💻 и другие)
-        Заголовок — ЗАГЛАВНЫМИ БУКВАМИ, броский
-        Стиль: лёгкий, дружелюбный, с IT-юмором
-        Тон: вдохновляющий, допускается лёгкий сарказм
-        В конце — ссылка на источник (если есть) и хэштеги
-        Финал: интригующий вопрос или призыв к дискуссии
-        Категория новости: [укажи категорию, например: ИИ, стартапы, кибербезопасность и т.д.]
-        Оригинальный контент: {original_content}
         
+        # НОВЫЙ ПРОМПТ с @infinewss в конце
+        self.prompt_template = """
+Ты – профессиональный новостной редактор. Твоя задача – переработать предоставленный новостной текст для публикации в Telegram-канале.
+
+Требования:
+- Сделай текст кратким (не более 500 символов).
+- Сохрани все ключевые факты: что произошло, где, когда, кто участники.
+- Убери воду, клише, повторы.
+- Переформулируй, чтобы текст был живым и понятным широкой аудитории.
+- В конце добавь хэштеги (не более 3), отражающие тему (например, #Технологии #Rust #Новости).
+- Оригинал пиши на русском языке (если новость на другом языке – переведи на русский и отредактируй).
+- После хэштегов добавь "@infinewss".
+
+Исходный новостной текст:
+---
+{original_content}
+---
+Твой ответ должен содержать только отредактированный текст, хэштеги и "@infinewss" – без лишних пояснений.
         """
 
         # Инициализация клиента OpenAI с OpenRouter
@@ -51,7 +54,6 @@ class AIProcessor:
     def process_news(self, news_item):
         """Обработка новости с помощью AI"""
         try:
-            # Проверка наличия и длины контента
             content = news_item.get('content', '')
             content_length = len(content)
             
@@ -60,36 +62,35 @@ class AIProcessor:
             else:
                 logger.info(f"Обработка новости '{news_item['title']}' с контентом длиной {content_length} символов")
             
-            # Подготовка промта
             prompt = self.prompt_template.format(
-                original_title=news_item['title'],
-                original_content=content,
-                source_url=news_item['url'],
-                category=news_item['category']
+                original_content=content
             )
 
             logger.info(f"Отправка новости '{news_item['title']}' на обработку AI через OpenRouter")
 
-            # Запрос к OpenRouter API с моделью Qwen3
             completion = self.client.chat.completions.create(
                 extra_headers={
-                    "HTTP-Referer": self.site_url,  # Для рейтинга на openrouter.ai
-                    "X-Title": self.site_name,      # Для рейтинга на openrouter.ai
+                    "HTTP-Referer": self.site_url,
+                    "X-Title": self.site_name,
                 },
                 extra_body={},
-                model="google/gemma-3-27b-it:free",
+                model="google/gemini-2.0-flash-lite-001",  # бесплатная модель
                 messages=[
-                    {"role": "system", "content": "Ты - редактор IT-новостей для Telegram-канала."},
+                    {"role": "system", "content": "Ты - редактор новостей для Telegram-канала."},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=500,
                 temperature=0.7
             )
 
-            # Получение ответа от AI
             ai_response = completion.choices[0].message.content.strip()
 
-            # Разделение на заголовок и контент
+            # Если ответ пустой — логируем ошибку
+            if not ai_response:
+                logger.error(f"AI вернул пустой ответ для новости '{news_item['title']}'")
+                return {"success": False, "error": "Empty AI response"}
+
+            # Разделение на заголовок и контент (если нужно)
             lines = ai_response.split('\n')
             processed_title = lines[0] if lines else ""
             processed_content = '\n'.join(lines[1:]) if len(lines) > 1 else ""
@@ -127,7 +128,6 @@ class AIProcessor:
             if count >= batch_size:
                 break
 
-            # Проверка качества контента
             content_length = len(news_item.get('content', ''))
             if content_length < 50:
                 logger.warning(f"Пропуск новости '{news_item['title']}' из-за недостаточного контента ({content_length} символов)")
@@ -140,7 +140,6 @@ class AIProcessor:
                 skipped += 1
                 continue
 
-            # Обработка новости
             result = self.process_news(news_item)
             results.append(result)
 
